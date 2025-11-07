@@ -21,3 +21,6 @@ RED_B = 0
 # Pink: RED_R = 255, RED_G = 20, RED_B = 147
 # Purple: RED_R = 128, RED_G = 0, RED_B = 128
 
+# Note: Audio visualization LED range is configured in HomeStrip.ino
+# Edit AUDIO_START_LED and AUDIO_END_LED constants in the Arduino code
+

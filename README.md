@@ -12,9 +12,11 @@ An Arduino-based LED strip that responds to your computer activity - mouse movem
 - 🎨 **Configurable Colors**: Customize the "red" color to any RGB value you want
 - 🔌 **Auto-Detection**: Automatically detects CH340 Arduino on any COM port
 - 🖥️ **System Tray App**: Runs in the background with a system tray icon (Windows)
+- 🔊 **Audio Visualization**: LEDs 1-20 react to computer audio as a level meter (expands from center)
 - ⚙️ **Runtime Controls**: Right-click the tray icon to enable/disable features:
   - Toggle keyboard reaction on/off
   - Toggle mouse reaction on/off
+  - Toggle audio visualization on/off
   - Stay On mode (keeps LEDs lit even when idle)
 
 ## Hardware Requirements
@@ -90,6 +92,20 @@ SERIAL_PORT = 'COM3'  # Windows
 SERIAL_PORT = '/dev/ttyUSB0'  # Linux
 ```
 
+### Audio Visualization Configuration
+
+Configure which LEDs are used for audio visualization in `HomeStrip.ino`:
+
+```cpp
+#define AUDIO_START_LED  1     // First LED for audio visualization
+#define AUDIO_END_LED    5     // Last LED for audio visualization
+```
+
+**Examples:**
+- Use LEDs 1-5: `AUDIO_START_LED = 1, AUDIO_END_LED = 5`
+- Use LEDs 1-20: `AUDIO_START_LED = 1, AUDIO_END_LED = 20`
+- Use LEDs 5-25: `AUDIO_START_LED = 5, AUDIO_END_LED = 25`
+
 ### Command Line Color Override
 
 You can also override the color when running the script:
@@ -126,7 +142,8 @@ The executable will be in the `dist/` folder. See `docs/build_instructions.md` f
 When running the executable, you'll see an icon in the system tray. Right-click it to access:
 
 - **React to Keyboard**: Toggle keyboard monitoring (✓ when enabled)
-- **React to Mouse**: Toggle mouse monitoring (✓ when enabled)  
+- **React to Mouse**: Toggle mouse monitoring (✓ when enabled)
+- **React to Audio**: Toggle audio visualization (✓ when enabled)
 - **Stay On**: Keep LEDs lit even when idle (sends keep-alive signals)
 - **Exit**: Close the application
 
@@ -137,7 +154,8 @@ When running the executable, you'll see an icon in the system tray. Right-click 
 1. **Idle Mode**: Strip is off (black)
 2. **Mouse Active**: Strip fades to red when mouse moves
 3. **Keyboard Active**: Single LED lights up and moves forward with each keystroke
-4. **Auto-Fade**: After 5 seconds of inactivity, automatically transitions
+4. **Audio Active**: LEDs 1-20 display as a level meter, expanding symmetrically from center based on audio level
+5. **Auto-Fade**: After 5 seconds of inactivity, automatically transitions
 
 ### Communication Protocol
 
@@ -146,6 +164,7 @@ The PC sends simple commands via serial:
 - `K` - Key pressed
 - `B` - Backspace pressed
 - `S` - Space pressed
+- `A,level` - Audio level (0 to number of LEDs in range, clamped by Arduino)
 - `C,r,g,b` - Set color (RGB values)
 
 ## Troubleshooting
@@ -192,6 +211,25 @@ The PC sends simple commands via serial:
 3. **Keyboard/Mouse Monitoring Fails**:
    - On Linux, may need: `sudo pip install pynput`
    - On some systems, pynput requires additional permissions
+
+### Audio Visualization Not Working
+
+1. **Windows System Audio Capture**:
+   - Enable "Stereo Mix" in Windows Sound settings:
+     - Right-click sound icon → Sounds → Recording tab
+     - Right-click empty space → Show Disabled Devices
+     - Enable "Stereo Mix" and set as default recording device
+   - Or use a virtual audio cable (e.g., VB-Audio Virtual Cable)
+
+2. **No Audio Detected**:
+   - Check that audio is playing on your computer
+   - Adjust sensitivity in `pc_monitor.py` (change the multiplier in `audio_callback`)
+   - Make sure "React to Audio" is enabled in the system tray menu
+
+3. **Audio Device Errors**:
+   - The app will silently continue if audio capture fails
+   - Check that your audio drivers are installed
+   - Try restarting the application
 
 ## File Structure
 

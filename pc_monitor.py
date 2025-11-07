@@ -14,6 +14,8 @@ import sys
 import os
 import pystray
 from PIL import Image
+import sounddevice as sd
+import numpy as np
 
 # Try to import from config file, otherwise use defaults
 try:
@@ -38,6 +40,7 @@ MOUSE_THROTTLE_MS = 50  # Throttle mouse commands to avoid flooding
 react_to_keyboard = True
 react_to_mouse = True
 stay_on = True
+react_to_audio = True
 
 # Listeners
 mouse_listener = None
@@ -197,6 +200,16 @@ def toggle_stay_on(icon, item):
     if tray_icon:
         tray_icon.menu = create_menu()
 
+def toggle_audio(icon, item):
+    """Toggle audio reaction."""
+    global react_to_audio, tray_icon
+    react_to_audio = not react_to_audio
+    if tray_icon:
+        tray_icon.menu = create_menu()
+    # Clear audio visualization when disabled
+    if not react_to_audio and arduino and arduino.is_open:
+        send_command('A,0')
+
 def exit_app(icon, item):
     """Exit the application."""
     global mouse_listener, keyboard_listener, arduino, tray_icon
@@ -211,7 +224,7 @@ def exit_app(icon, item):
 
 def create_menu():
     """Create the tray menu with current states."""
-    global react_to_keyboard, react_to_mouse, stay_on
+    global react_to_keyboard, react_to_mouse, stay_on, react_to_audio
     return pystray.Menu(
         pystray.MenuItem(
             lambda text: f"React to Keyboard: {'✓' if react_to_keyboard else '✗'}",
@@ -220,6 +233,10 @@ def create_menu():
         pystray.MenuItem(
             lambda text: f"React to Mouse: {'✓' if react_to_mouse else '✗'}",
             toggle_mouse
+        ),
+        pystray.MenuItem(
+            lambda text: f"React to Audio: {'✓' if react_to_audio else '✗'}",
+            toggle_audio
         ),
         pystray.MenuItem(
             lambda text: f"Stay On: {'✓' if stay_on else '✗'}",
@@ -263,6 +280,45 @@ def keep_alive_thread():
         if stay_on and arduino and arduino.is_open:
             send_command('M')  # Send mouse command to reset idle timer
 
+def audio_callback(indata, frames, time_info, status):
+    """Callback function for audio stream."""
+    global react_to_audio
+    if not react_to_audio or not arduino or not arduino.is_open:
+        return
+    
+    # Calculate RMS (Root Mean Square) for audio level
+    rms = np.sqrt(np.mean(indata**2))
+    
+    # Convert to level (0-20, Arduino will clamp to its configured range)
+    # Use logarithmic scaling for better visualization
+    # RMS values are typically 0.0 to 1.0, so scale appropriately
+    # Adjust multiplier (2000) for sensitivity - higher = more sensitive
+    # Arduino uses AUDIO_START_LED and AUDIO_END_LED constants to determine range
+    level = int(min(20, max(0, rms * 2000)))  # Max 20, Arduino will clamp to its range
+    
+    # Always send level (even 0) to keep visualization updated
+    send_command(f'A,{level}')
+
+def audio_capture_thread():
+    """Thread to capture audio and send levels to Arduino.
+    
+    Note: On Windows, to capture system audio (what you hear), you may need to:
+    - Enable "Stereo Mix" in Windows Sound settings (Recording devices)
+    - Or use a virtual audio cable
+    - Or set the default input device to a loopback device
+    """
+    global react_to_audio
+    try:
+        # Try to use default input device (may need to be set to loopback/sterio mix on Windows)
+        # Open audio stream (stereo input, 44100 Hz sample rate, small blocksize for low latency)
+        with sd.InputStream(callback=audio_callback, channels=2, samplerate=44100, blocksize=512, dtype='float32'):
+            while True:
+                time.sleep(0.1)  # Small sleep to prevent CPU spinning
+    except Exception as e:
+        # Silently handle audio errors (device not available, etc.)
+        # Audio visualization will simply not work if capture fails
+        pass
+
 def main():
     """Main function to set up monitoring."""
     global arduino
@@ -279,6 +335,10 @@ def main():
     # Start keep-alive thread
     keep_alive = Thread(target=keep_alive_thread, daemon=True)
     keep_alive.start()
+    
+    # Start audio capture thread
+    audio_thread = Thread(target=audio_capture_thread, daemon=True)
+    audio_thread.start()
     
     # Set up and run tray icon
     icon = setup_tray()

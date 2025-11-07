@@ -4,6 +4,10 @@
 #define LED_PIN       5        // Data pin connected to the strip (D5)
 #define NUM_LEDS      30       // Number of LEDs (set to your exact count)
 #define BRIGHTNESS    77       // ~30% of 255 ≈ 76.5 → 77
+
+// Audio visualization LED range (1-based indexing)
+#define AUDIO_START_LED  1     // First LED for audio visualization
+#define AUDIO_END_LED    14     // Last LED for audio visualization
 // ------------------------------------------
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -19,15 +23,23 @@ enum State {
   STATE_MOUSE_ACTIVE,
   STATE_KEYBOARD_ACTIVE,
   STATE_FADING_TO_RED,
-  STATE_FADING_TO_BLACK
+  STATE_FADING_TO_BLACK,
+  STATE_AUDIO_ACTIVE
 };
 
 State currentState = STATE_IDLE;
 int currentLedPos = 0;  // Current LED position for keyboard mode
 unsigned long lastActivityTime = 0;
 unsigned long lastTypingTime = 0;
+unsigned long lastAudioTime = 0;
 const unsigned long IDLE_TIMEOUT = 5000;  // 5 seconds
 const unsigned long TRANSITION_TIME = 1000;  // 1 second for transitions
+const unsigned long AUDIO_TIMEOUT = 200;  // 200ms - if no audio for this long, clear visualization
+
+int audioLevel = 0;  // Current audio level (0 to numAudioLeds)
+
+// Calculate number of LEDs in audio range
+const int numAudioLeds = AUDIO_END_LED - AUDIO_START_LED + 1;
 
 // Fade variables
 unsigned long fadeStartTime = 0;
@@ -116,11 +128,34 @@ void handleCommand(String cmd) {
         }
       }
       break;
+      
+    case 'A':  // Audio level: A,level (0 to numAudioLeds, clamped to configured range)
+      {
+        int commaPos = cmd.indexOf(',');
+        if (commaPos > 0) {
+          int level = cmd.substring(commaPos + 1).toInt();
+          // Clamp to configured audio LED range
+          audioLevel = constrain(level, 0, numAudioLeds);
+          currentState = STATE_AUDIO_ACTIVE;
+          lastAudioTime = millis();
+          lastActivityTime = millis();
+        }
+      }
+      break;
+      
   }
 }
 
 void updateState() {
   unsigned long currentTime = millis();
+  
+  // Check if audio stopped
+  if (currentState == STATE_AUDIO_ACTIVE) {
+    if (currentTime - lastAudioTime > AUDIO_TIMEOUT) {
+      audioLevel = 0;
+      // Don't change state immediately, let it fade naturally
+    }
+  }
   
   // Check if typing stopped for 5 seconds
   if (currentState == STATE_KEYBOARD_ACTIVE) {
@@ -130,9 +165,10 @@ void updateState() {
     }
   }
   
-  // Check if no activity - fade to black
+  // Check if no activity - fade to black (but not if audio is active)
   if (currentState != STATE_FADING_TO_BLACK && 
       currentState != STATE_KEYBOARD_ACTIVE &&
+      currentState != STATE_AUDIO_ACTIVE &&
       currentTime - lastActivityTime > IDLE_TIMEOUT) {
     startFadeToBlack();
     currentState = STATE_FADING_TO_BLACK;
@@ -176,11 +212,90 @@ void renderState() {
       strip.show();
       break;
       
+    case STATE_AUDIO_ACTIVE:
+      renderAudioLevel();
+      break;
+      
     case STATE_FADING_TO_RED:
     case STATE_FADING_TO_BLACK:
       renderFade();
       break;
   }
+}
+
+void renderAudioLevel() {
+  // Clear all LEDs first
+  strip.clear();
+  
+  if (audioLevel == 0) {
+    // Make sure LEDs outside audio range stay cleared
+    for (int i = 0; i < AUDIO_START_LED - 1; i++) {
+      if (i < NUM_LEDS) strip.setPixelColor(i, 0);
+    }
+    for (int i = AUDIO_END_LED; i < NUM_LEDS; i++) {
+      strip.setPixelColor(i, 0);
+    }
+    strip.show();
+    return;
+  }
+  
+  // Render level meter from center to sides on configured LED range
+  // Convert 1-based LED numbers to 0-based indices
+  int startIdx = AUDIO_START_LED - 1;
+  int endIdx = AUDIO_END_LED - 1;
+  
+  // If level equals number of LEDs, light all LEDs in range
+  if (audioLevel >= numAudioLeds) {
+    for (int i = startIdx; i <= endIdx; i++) {
+      if (i >= 0 && i < NUM_LEDS) {
+        strip.setPixelColor(i, getRedColor());
+      }
+    }
+    // Clear LEDs outside range
+    for (int i = 0; i < startIdx; i++) {
+      if (i < NUM_LEDS) strip.setPixelColor(i, 0);
+    }
+    for (int i = endIdx + 1; i < NUM_LEDS; i++) {
+      strip.setPixelColor(i, 0);
+    }
+    strip.show();
+    return;
+  }
+  
+  int centerIdx = (startIdx + endIdx) / 2;  // Center index
+  
+  // For level N, light up N LEDs symmetrically from center
+  // Calculate how many LEDs on each side of center
+  // For odd N: (N-1)/2 on left, center, (N-1)/2 on right
+  // For even N: N/2 on left, N/2 on right (no single center)
+  int ledsOnLeft = (audioLevel - 1) / 2;   // LEDs to the left of center (not including center)
+  int ledsOnRight = (audioLevel + 1) / 2;  // LEDs to the right including center (rounds up)
+  
+  // Calculate start and end positions (0-indexed, clamped to audio range)
+  // Start from center and expand outward
+  int startLed = max(startIdx, centerIdx - ledsOnLeft);      // Start from left side
+  int endLed = min(endIdx, centerIdx + ledsOnRight - 1);      // End on right side (-1 because centerIdx is 0-indexed)
+  
+  // Light up LEDs symmetrically from center
+  // Only light LEDs within the audio range
+  for (int i = startLed; i <= endLed; i++) {
+    // Ensure we only light LEDs in the configured audio range
+    if (i >= startIdx && i <= endIdx && i >= 0 && i < NUM_LEDS) {
+      strip.setPixelColor(i, getRedColor());
+    }
+  }
+  
+  // Explicitly clear LEDs outside the audio range to be safe
+  for (int i = 0; i < startIdx; i++) {
+    if (i < NUM_LEDS) {
+      strip.setPixelColor(i, 0);
+    }
+  }
+  for (int i = endIdx + 1; i < NUM_LEDS; i++) {
+    strip.setPixelColor(i, 0);
+  }
+  
+  strip.show();
 }
 
 void startFadeToRed() {
