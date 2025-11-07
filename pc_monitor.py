@@ -2,14 +2,18 @@
 """
 PC-side monitor for Arduino LED strip control.
 Monitors mouse and keyboard activity and sends commands via serial.
+Runs as a system tray application.
 """
 
 import serial
 import serial.tools.list_ports
 import time
 from pynput import mouse, keyboard
-from threading import Lock
+from threading import Lock, Thread
 import sys
+import os
+import pystray
+from PIL import Image
 
 # Try to import from config file, otherwise use defaults
 try:
@@ -22,13 +26,32 @@ except ImportError:
     RED_G = 0
     RED_B = 0
 
-# State
+# Global state
 last_mouse_pos = None
 mouse_moved = False
 serial_lock = Lock()
 arduino = None
 last_mouse_command_time = 0
 MOUSE_THROTTLE_MS = 50  # Throttle mouse commands to avoid flooding
+
+# Feature toggles
+react_to_keyboard = True
+react_to_mouse = True
+stay_on = True
+
+# Listeners
+mouse_listener = None
+keyboard_listener = None
+tray_icon = None
+
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller."""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 def send_command(cmd):
     """Send a command to Arduino via serial."""
@@ -38,11 +61,15 @@ def send_command(cmd):
             with serial_lock:
                 arduino.write((cmd + '\n').encode())
         except Exception as e:
-            print(f"Error sending command: {e}")
+            pass  # Silently fail in tray mode
 
 def on_mouse_move(x, y):
     """Handle mouse movement."""
-    global last_mouse_pos, mouse_moved, last_mouse_command_time
+    global last_mouse_pos, mouse_moved, last_mouse_command_time, react_to_mouse
+    
+    if not react_to_mouse:
+        return
+    
     if last_mouse_pos is None:
         last_mouse_pos = (x, y)
         return
@@ -59,7 +86,10 @@ def on_mouse_move(x, y):
 
 def on_key_press(key):
     """Handle key press."""
-    global mouse_moved
+    global mouse_moved, react_to_keyboard
+    
+    if not react_to_keyboard:
+        return
     
     # Reset mouse moved flag when typing
     mouse_moved = False
@@ -84,7 +114,6 @@ def find_ch340_port():
     # First, try to find by description containing "CH340"
     for port in ports:
         if 'CH340' in port.description.upper() or 'USB-SERIAL' in port.description.upper():
-            print(f"Found CH340 device: {port.device} - {port.description}")
             return port.device
     
     # If not found by description, try to find by VID/PID (CH340 common IDs)
@@ -92,23 +121,16 @@ def find_ch340_port():
     for port in ports:
         if hasattr(port, 'vid') and hasattr(port, 'pid'):
             if port.vid == 0x1A86:  # CH340 vendor ID
-                print(f"Found CH340 device by VID/PID: {port.device} - {port.description}")
                 return port.device
     
-    # If still not found, list all available ports and let user choose
+    # If still not found, try the first available port
     if ports:
-        print("\nCH340 device not automatically detected. Available COM ports:")
-        for i, port in enumerate(ports, 1):
-            print(f"  {i}. {port.device} - {port.description}")
-        
-        # Try the first available port (common case)
-        print(f"\nTrying first available port: {ports[0].device}")
         return ports[0].device
     
     return None
 
-def main():
-    """Main function to set up monitoring."""
+def setup_arduino():
+    """Connect to Arduino."""
     global arduino, RED_R, RED_G, RED_B
     
     # Override with command line arguments if provided
@@ -117,82 +139,150 @@ def main():
             RED_R = int(sys.argv[1])
             RED_G = int(sys.argv[2])
             RED_B = int(sys.argv[3])
-            print(f"Using command line color: RGB({RED_R}, {RED_G}, {RED_B})")
         except ValueError:
-            print("Invalid RGB values. Using config/default values.")
+            pass
     
     # Auto-detect CH340 port if not specified or if specified port doesn't work
     port_to_use = SERIAL_PORT
     
     # If SERIAL_PORT is None or empty, or if we want to auto-detect, find CH340
     if not SERIAL_PORT or SERIAL_PORT == 'AUTO' or SERIAL_PORT.upper() == 'AUTO':
-        print("Auto-detecting CH340 Arduino...")
         detected_port = find_ch340_port()
         if detected_port:
             port_to_use = detected_port
         else:
-            print("ERROR: No COM ports found. Please connect your Arduino.")
-            sys.exit(1)
+            return False
     
     # Try to connect to Arduino
-    global arduino
-    print(f"Connecting to Arduino on {port_to_use}...")
     try:
         arduino = serial.Serial(port_to_use, BAUD_RATE, timeout=1)
         time.sleep(2)  # Wait for Arduino to initialize
-        print("Connected to Arduino!")
-    except Exception as e:
+        
+        # Send initial color configuration
+        send_command(f'C,{RED_R},{RED_G},{RED_B}')
+        return True
+    except Exception:
         # If connection failed and we used a specific port, try auto-detection
         if port_to_use == SERIAL_PORT and SERIAL_PORT != 'AUTO':
-            print(f"Failed to connect to {SERIAL_PORT}, trying auto-detection...")
             detected_port = find_ch340_port()
             if detected_port and detected_port != SERIAL_PORT:
                 try:
                     port_to_use = detected_port
                     arduino = serial.Serial(port_to_use, BAUD_RATE, timeout=1)
                     time.sleep(2)
-                    print(f"Connected to Arduino on {port_to_use}!")
-                except Exception as e2:
-                    print(f"Failed to connect to auto-detected port: {e2}")
-                    sys.exit(1)
-            else:
-                print(f"Failed to connect to Arduino: {e}")
-                sys.exit(1)
-        else:
-            print(f"Failed to connect to Arduino: {e}")
-            print("\nPlease check:")
-            print(f"1. Arduino is connected")
-            print("2. No other program is using the serial port")
-            print("3. Arduino drivers are installed (CH340 driver)")
-            print("\nTo manually specify a port, set SERIAL_PORT in config.py")
-            sys.exit(1)
+                    send_command(f'C,{RED_R},{RED_G},{RED_B}')
+                    return True
+                except Exception:
+                    return False
+        return False
+
+def toggle_keyboard(icon, item):
+    """Toggle keyboard reaction."""
+    global react_to_keyboard, keyboard_listener, tray_icon
+    react_to_keyboard = not react_to_keyboard
+    if tray_icon:
+        tray_icon.menu = create_menu()
+
+def toggle_mouse(icon, item):
+    """Toggle mouse reaction."""
+    global react_to_mouse, tray_icon
+    react_to_mouse = not react_to_mouse
+    if tray_icon:
+        tray_icon.menu = create_menu()
+
+def toggle_stay_on(icon, item):
+    """Toggle stay on mode."""
+    global stay_on, tray_icon
+    stay_on = not stay_on
+    if tray_icon:
+        tray_icon.menu = create_menu()
+
+def exit_app(icon, item):
+    """Exit the application."""
+    global mouse_listener, keyboard_listener, arduino, tray_icon
+    if mouse_listener:
+        mouse_listener.stop()
+    if keyboard_listener:
+        keyboard_listener.stop()
+    if arduino:
+        arduino.close()
+    icon.stop()
+    sys.exit(0)
+
+def create_menu():
+    """Create the tray menu with current states."""
+    global react_to_keyboard, react_to_mouse, stay_on
+    return pystray.Menu(
+        pystray.MenuItem(
+            lambda text: f"React to Keyboard: {'✓' if react_to_keyboard else '✗'}",
+            toggle_keyboard
+        ),
+        pystray.MenuItem(
+            lambda text: f"React to Mouse: {'✓' if react_to_mouse else '✗'}",
+            toggle_mouse
+        ),
+        pystray.MenuItem(
+            lambda text: f"Stay On: {'✓' if stay_on else '✗'}",
+            toggle_stay_on
+        ),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Exit", exit_app)
+    )
+
+def setup_tray():
+    """Set up the system tray icon."""
+    global tray_icon
     
-    # Send initial color configuration
-    send_command(f'C,{RED_R},{RED_G},{RED_B}')
-    print(f"Set LED color to RGB({RED_R}, {RED_G}, {RED_B})")
+    # Load icon
+    try:
+        icon_path = get_resource_path("icon.png")
+        image = Image.open(icon_path)
+    except Exception:
+        # Fallback to a simple icon if file not found
+        image = Image.new('RGB', (64, 64), color='red')
     
-    # Set up mouse and keyboard listeners
-    print("\nStarting mouse and keyboard monitoring...")
-    print("Press Ctrl+C to stop\n")
+    # Create menu
+    menu = create_menu()
     
+    tray_icon = pystray.Icon("HomeStrip", image, "HomeStrip Monitor", menu)
+    return tray_icon
+
+def start_listeners():
+    """Start mouse and keyboard listeners."""
+    global mouse_listener, keyboard_listener
     mouse_listener = mouse.Listener(on_move=on_mouse_move)
     keyboard_listener = keyboard.Listener(on_press=on_key_press)
-    
     mouse_listener.start()
     keyboard_listener.start()
+
+def keep_alive_thread():
+    """Thread to send keep-alive commands when Stay On is enabled."""
+    global stay_on
+    while True:
+        time.sleep(4)  # Send every 4 seconds (before 5 second timeout)
+        if stay_on and arduino and arduino.is_open:
+            send_command('M')  # Send mouse command to reset idle timer
+
+def main():
+    """Main function to set up monitoring."""
+    global arduino
     
-    try:
-        # Keep the script running
-        mouse_listener.join()
-        keyboard_listener.join()
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        mouse_listener.stop()
-        keyboard_listener.stop()
-        if arduino:
-            arduino.close()
-        print("Done!")
+    # Connect to Arduino
+    if not setup_arduino():
+        # Still show tray icon even if Arduino connection fails
+        # User can try to reconnect later
+        pass
+    
+    # Start listeners
+    start_listeners()
+    
+    # Start keep-alive thread
+    keep_alive = Thread(target=keep_alive_thread, daemon=True)
+    keep_alive.start()
+    
+    # Set up and run tray icon
+    icon = setup_tray()
+    icon.run()
 
 if __name__ == '__main__':
     main()
-

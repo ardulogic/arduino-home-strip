@@ -54,3 +54,6 @@ desktop.ini
 *.dylib
 *.pyd
 
+# Generated icon (auto-converted from icon.png)
+icon.ico
+

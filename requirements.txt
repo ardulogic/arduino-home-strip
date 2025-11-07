@@ -1,4 +1,6 @@
 pyserial>=3.5
 pynput>=1.7.6
 pyinstaller>=5.0
+pystray>=0.19.4
+Pillow>=9.0.0
 

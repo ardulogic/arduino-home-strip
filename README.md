@@ -11,6 +11,11 @@ An Arduino-based LED strip that responds to your computer activity - mouse movem
 - ⏱️ **Auto-Fade**: Automatically fades to red after 5 seconds of no typing, and fades to black after 5 seconds of no activity
 - 🎨 **Configurable Colors**: Customize the "red" color to any RGB value you want
 - 🔌 **Auto-Detection**: Automatically detects CH340 Arduino on any COM port
+- 🖥️ **System Tray App**: Runs in the background with a system tray icon (Windows)
+- ⚙️ **Runtime Controls**: Right-click the tray icon to enable/disable features:
+  - Toggle keyboard reaction on/off
+  - Toggle mouse reaction on/off
+  - Stay On mode (keeps LEDs lit even when idle)
 
 ## Hardware Requirements
 
@@ -107,10 +112,23 @@ python build_exe.py
 
 ### Manual Build
 ```bash
-pyinstaller --onefile --name HomeStripMonitor --console --add-data "config.py;." pc_monitor.py
+pyinstaller --onefile --name HomeStripMonitor --windowed --icon icon.ico --add-data "config.py;." --add-data "icon.png;." pc_monitor.py
 ```
 
+**Note:** The build scripts automatically convert `icon.png` to `icon.ico` for Windows (required for executable file icons).
+
 The executable will be in the `dist/` folder. See `docs/build_instructions.md` for more details.
+
+**Note:** The executable runs as a system tray application. After launching, look for the icon in the system tray (bottom right on Windows). Right-click the icon to access the menu with options to enable/disable features.
+
+### System Tray Menu
+
+When running the executable, you'll see an icon in the system tray. Right-click it to access:
+
+- **React to Keyboard**: Toggle keyboard monitoring (✓ when enabled)
+- **React to Mouse**: Toggle mouse monitoring (✓ when enabled)  
+- **Stay On**: Keep LEDs lit even when idle (sends keep-alive signals)
+- **Exit**: Close the application
 
 ## How It Works
 
@@ -180,10 +198,14 @@ The PC sends simple commands via serial:
 ```
 HomeStrip/
 ├── HomeStrip.ino          # Arduino code
-├── pc_monitor.py          # Python monitoring script
+├── pc_monitor.py          # Python monitoring script (system tray app)
 ├── config.py              # Configuration file
+├── icon.png               # Application icon (PNG format)
+├── icon.ico               # Application icon (ICO format, auto-generated)
+├── convert_icon.py        # Icon conversion utility
 ├── build_exe.py           # Build script for executable
 ├── build.bat              # Windows batch build script
+├── refresh_icon_cache.bat # Windows icon cache refresh utility
 ├── requirements.txt       # Python dependencies
 ├── docs/
 │   └── build_instructions.md  # Detailed build guide
@@ -227,4 +249,14 @@ Feel free to submit issues, fork the repository, and create pull requests for an
 - Uses [Adafruit NeoPixel Library](https://github.com/adafruit/Adafruit_NeoPixel)
 - Uses [pynput](https://github.com/moses-palmer/pynput) for input monitoring
 - Uses [PySerial](https://github.com/pyserial/pyserial) for serial communication
+- Uses [pystray](https://github.com/moses-palmer/pystray) for system tray functionality
+- Uses [Pillow](https://github.com/python-pillow/Pillow) for image processing
+
+## Quick Start
+
+1. **Upload Arduino code**: Open `HomeStrip.ino` in Arduino IDE and upload to your board
+2. **Install Python dependencies**: `pip install -r requirements.txt`
+3. **Run the monitor**: `python pc_monitor.py` (or use the built executable)
+4. **Configure** (optional): Edit `config.py` to customize colors and settings
+5. **Enjoy**: Move your mouse or type to see the LEDs react!
 

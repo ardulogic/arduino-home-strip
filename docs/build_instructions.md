@@ -25,12 +25,14 @@ This guide shows you how to create a standalone `.exe` file from the Python moni
 
 2. Run PyInstaller:
    ```bash
-   pyinstaller --onefile --name HomeStripMonitor --console --add-data "config.py;." pc_monitor.py
+   pyinstaller --onefile --name HomeStripMonitor --windowed --icon icon.ico --add-data "config.py;." --add-data "icon.png;." pc_monitor.py
    ```
+
+   **Note:** The build script automatically converts `icon.png` to `icon.ico` if needed (Windows requires .ico format for executable icons).
 
    **Note for Linux/Mac:**
    ```bash
-   pyinstaller --onefile --name HomeStripMonitor --console --add-data "config.py:." pc_monitor.py
+   pyinstaller --onefile --name HomeStripMonitor --windowed --icon icon.png --add-data "config.py:." --add-data "icon.png:." pc_monitor.py
    ```
 
 3. Find your executable in the `dist/` folder
@@ -39,18 +41,13 @@ This guide shows you how to create a standalone `.exe` file from the Python moni
 
 - `--onefile`: Creates a single executable file (easier to distribute)
 - `--name HomeStripMonitor`: Sets the name of the executable
-- `--console`: Keeps the console window visible (remove this to hide the window)
+- `--windowed`: Hides the console window (required for system tray app)
+- `--icon icon.ico`: Sets the icon for the executable (Windows requires .ico format, auto-converted from icon.png if needed)
 - `--add-data "config.py;."`: Includes config.py in the executable
+- `--add-data "icon.png;."`: Includes icon.png in the executable (for system tray)
 - `pc_monitor.py`: The main Python script to build
 
-## Alternative: Create a Windowed Version (No Console)
-
-If you want to hide the console window, use:
-```bash
-pyinstaller --onefile --name HomeStripMonitor --windowed --add-data "config.py;." pc_monitor.py
-```
-
-**Note:** With `--windowed`, you won't see error messages, so use `--console` for debugging.
+**Note:** The application runs as a system tray app, so `--windowed` is required. The icon will appear in the system tray (bottom right on Windows).
 
 ## Troubleshooting
 
